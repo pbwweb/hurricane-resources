@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: hurricane-resources
+metadata:
+  template: hurricane-resources@0.0.1-beta
+
+# Define the Azure services configuration
+services:
+  admin:
+    project: ./HurricaneResources.Web.Admin
+    language: dotnet
+    host: containerapp
+    docker:
+      path: ./Dockerfile.admin
+      context: .
+  
+  user:
+    project: ./HurricaneResources.Web.User
+    language: dotnet
+    host: containerapp
+    docker:
+      path: ./Dockerfile.user
+      context: .
+
+# Configure the infrastructure
+infra:
+  provider: bicep
+  path: infra
+
+# Pipeline configuration for GitHub Actions/Azure DevOps
+pipeline:
+  provider: github
+
+# Environment hooks
+hooks:
+  postdeploy:
+    windows:
+      shell: pwsh
+      run: |
+        Write-Host "Hurricane Resources deployed successfully!"
+        Write-Host "Admin App: ${SERVICE_ADMIN_URL}"
+        Write-Host "User App: ${SERVICE_USER_URL}"
+    posix:
+      shell: sh
+      run: |
+        echo "Hurricane Resources deployed successfully!"
+        echo "Admin App: ${SERVICE_ADMIN_URL}"
+        echo "User App: ${SERVICE_USER_URL}"

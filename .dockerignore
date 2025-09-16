@@ -1,0 +1,38 @@
+# Ignore git files
+.git/
+.gitignore
+
+# Ignore documentation
+*.md
+README*
+
+# Ignore development files
+.vscode/
+.vs/
+
+# Ignore build outputs
+**/bin/
+**/obj/
+
+# Ignore Azure files not needed in container
+azure.yaml
+infra/
+.azure/
+
+# Ignore test files
+**/*Tests/
+
+# Ignore package files
+*.nupkg
+*.snupkg
+
+# Ignore OS files
+Thumbs.db
+.DS_Store
+
+# Ignore temporary files
+*.tmp
+*.temp
+
+# Ignore log files
+*.log

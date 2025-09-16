@@ -1,0 +1,164 @@
+name: PR Environment Deploy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+
+env:
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  # Deploy PR Environment
+  deploy-pr:
+    runs-on: ubuntu-latest
+    name: Deploy PR Environment
+    if: github.event.action != 'closed'
+    environment: 
+      name: pr-${{ github.event.number }}
+      url: ${{ steps.deploy.outputs.SERVICE_USER_URL }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build solution
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Setup Azure Developer CLI
+      uses: Azure/setup-azd@v1.0.0
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Azure Dev Auth
+      run: azd auth login --client-id "${{ env.AZURE_CLIENT_ID }}" --federated-credential-provider "github" --tenant-id "${{ env.AZURE_TENANT_ID }}"
+
+    - name: Deploy PR Environment
+      id: deploy
+      run: |
+        ENV_NAME="pr-${{ github.event.number }}"
+        echo "Deploying to environment: $ENV_NAME"
+        
+        azd env new "$ENV_NAME" --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} --location eastus2
+        azd deploy --environment "$ENV_NAME"
+        
+        # Capture outputs
+        echo "SERVICE_USER_URL=$(azd env get-values --environment "$ENV_NAME" | grep SERVICE_USER_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+        echo "SERVICE_ADMIN_URL=$(azd env get-values --environment "$ENV_NAME" | grep SERVICE_ADMIN_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+    - name: Update PR Comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const userUrl = '${{ steps.deploy.outputs.SERVICE_USER_URL }}';
+          const adminUrl = '${{ steps.deploy.outputs.SERVICE_ADMIN_URL }}';
+          
+          const body = `## 🚀 PR Environment Deployed
+          
+          Your pull request has been deployed to a temporary environment for testing:
+          
+          ### 🌐 Application URLs
+          - **User App**: [${userUrl}](${userUrl})
+          - **Admin App**: [${adminUrl}](${adminUrl})
+          
+          ### 📋 Testing Checklist
+          - [ ] User app loads correctly
+          - [ ] Admin app authentication works
+          - [ ] Resource management functions properly
+          - [ ] Icon upload/display works
+          - [ ] Mobile responsiveness verified
+          
+          ### 🔧 Environment Details
+          - **Environment**: \`pr-${{ github.event.number }}\`
+          - **Commit**: \`${{ github.sha }}\`
+          - **Deployed**: ${new Date().toISOString()}
+          
+          > ⚠️ **Note**: This environment will be automatically deleted when the PR is closed.`;
+          
+          // Check if comment already exists
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          
+          const existingComment = comments.data.find(comment => 
+            comment.user.login === 'github-actions[bot]' && 
+            comment.body.includes('PR Environment Deployed')
+          );
+          
+          if (existingComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: body
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
+
+    - name: Run integration tests
+      run: |
+        USER_URL="${{ steps.deploy.outputs.SERVICE_USER_URL }}"
+        ADMIN_URL="${{ steps.deploy.outputs.SERVICE_ADMIN_URL }}"
+        
+        echo "Running integration tests..."
+        
+        # Test user app
+        if [ -n "$USER_URL" ]; then
+          echo "Testing User App: $USER_URL"
+          
+          # Basic health check
+          if curl -f -s -o /dev/null "$USER_URL"; then
+            echo "✅ User app health check passed"
+          else
+            echo "❌ User app health check failed"
+            exit 1
+          fi
+          
+          # Test that the page contains expected content
+          if curl -s "$USER_URL" | grep -i "hurricane" > /dev/null; then
+            echo "✅ User app content check passed"
+          else
+            echo "❌ User app content check failed"
+          fi
+        fi
+        
+        # Test admin app
+        if [ -n "$ADMIN_URL" ]; then
+          echo "Testing Admin App: $ADMIN_URL"
+          
+          # Basic health check
+          if curl -f -s -o /dev/null "$ADMIN_URL"; then
+            echo "✅ Admin app health check passed"
+          else
+            echo "❌ Admin app health check failed"
+            exit 1
+          fi
+        fi

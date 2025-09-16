@@ -1,0 +1,326 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # Build and Test Job
+  build:
+    runs-on: ubuntu-latest
+    name: Build and Test
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build solution
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Run tests
+      run: dotnet test --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage" --logger trx
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          **/*.trx
+          **/*.xml
+
+    - name: Upload code coverage
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: code-coverage
+        path: "**/coverage.cobertura.xml"
+
+  # Security and Code Quality
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    needs: build
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Run security scan
+      run: |
+        dotnet list package --vulnerable --include-transitive || true
+        dotnet list package --deprecated || true
+
+  # Docker Build and Security Scan
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Docker Build & Scan
+    needs: build
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Admin Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.admin
+        tags: hurricane-admin:${{ github.sha }}
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build User Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.user
+        tags: hurricane-user:${{ github.sha }}
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run Trivy vulnerability scanner - Admin
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'hurricane-admin:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-admin-results.sarif'
+
+    - name: Run Trivy vulnerability scanner - User
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'hurricane-user:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-user-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-admin-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-user-results.sarif'
+
+  # Infrastructure Validation
+  infrastructure-validation:
+    runs-on: ubuntu-latest
+    name: Validate Infrastructure
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Validate Bicep templates
+      uses: azure/arm-deploy@v1
+      with:
+        subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        scope: subscription
+        region: eastus2
+        template: ./infra/main.bicep
+        parameters: |
+          environmentName=validation-${{ github.run_number }}
+          location=eastus2
+        deploymentMode: Validate
+
+  # Deploy to Development Environment
+  deploy-dev:
+    runs-on: ubuntu-latest
+    name: Deploy to Development
+    needs: [build, security-scan, docker-build, infrastructure-validation]
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment: 
+      name: development
+      url: ${{ steps.deploy.outputs.SERVICE_USER_URL }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Azure Developer CLI
+      uses: Azure/setup-azd@v1.0.0
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Azure Dev Auth
+      run: azd auth login --client-id "${{ env.AZURE_CLIENT_ID }}" --federated-credential-provider "github" --tenant-id "${{ env.AZURE_TENANT_ID }}"
+
+    - name: Deploy Application
+      id: deploy
+      run: |
+        azd env new dev --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} --location eastus2
+        azd deploy --environment dev
+        
+        # Capture outputs
+        echo "SERVICE_USER_URL=$(azd env get-values --environment dev | grep SERVICE_USER_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+        echo "SERVICE_ADMIN_URL=$(azd env get-values --environment dev | grep SERVICE_ADMIN_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+    - name: Run smoke tests
+      run: |
+        USER_URL="${{ steps.deploy.outputs.SERVICE_USER_URL }}"
+        ADMIN_URL="${{ steps.deploy.outputs.SERVICE_ADMIN_URL }}"
+        
+        if [ -n "$USER_URL" ]; then
+          echo "Testing User App: $USER_URL"
+          curl -f -s -o /dev/null "$USER_URL" || (echo "User app health check failed" && exit 1)
+        fi
+        
+        if [ -n "$ADMIN_URL" ]; then
+          echo "Testing Admin App: $ADMIN_URL"
+          curl -f -s -o /dev/null "$ADMIN_URL" || (echo "Admin app health check failed" && exit 1)
+        fi
+
+  # Deploy to Production Environment
+  deploy-prod:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [build, security-scan, docker-build, infrastructure-validation]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: 
+      name: production
+      url: ${{ steps.deploy.outputs.SERVICE_USER_URL }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Azure Developer CLI
+      uses: Azure/setup-azd@v1.0.0
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Azure Dev Auth
+      run: azd auth login --client-id "${{ env.AZURE_CLIENT_ID }}" --federated-credential-provider "github" --tenant-id "${{ env.AZURE_TENANT_ID }}"
+
+    - name: Deploy Application
+      id: deploy
+      run: |
+        azd env new prod --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} --location eastus2
+        azd deploy --environment prod
+        
+        # Capture outputs
+        echo "SERVICE_USER_URL=$(azd env get-values --environment prod | grep SERVICE_USER_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+        echo "SERVICE_ADMIN_URL=$(azd env get-values --environment prod | grep SERVICE_ADMIN_URL | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+    - name: Run smoke tests
+      run: |
+        USER_URL="${{ steps.deploy.outputs.SERVICE_USER_URL }}"
+        ADMIN_URL="${{ steps.deploy.outputs.SERVICE_ADMIN_URL }}"
+        
+        if [ -n "$USER_URL" ]; then
+          echo "Testing User App: $USER_URL"
+          curl -f -s -o /dev/null "$USER_URL" || (echo "User app health check failed" && exit 1)
+        fi
+        
+        if [ -n "$ADMIN_URL" ]; then
+          echo "Testing Admin App: $ADMIN_URL"
+          curl -f -s -o /dev/null "$ADMIN_URL" || (echo "Admin app health check failed" && exit 1)
+        fi
+
+    - name: Create GitHub Release
+      if: success()
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release v${{ github.run_number }}
+        body: |
+          ## Hurricane Resources Release v${{ github.run_number }}
+          
+          ### Deployment Information
+          - **User Application**: ${{ steps.deploy.outputs.SERVICE_USER_URL }}
+          - **Admin Application**: ${{ steps.deploy.outputs.SERVICE_ADMIN_URL }}
+          - **Commit**: ${{ github.sha }}
+          - **Deployed**: ${{ github.event.head_commit.timestamp }}
+          
+          ### Changes
+          ${{ github.event.head_commit.message }}
+        draft: false
+        prerelease: false
+
+  # Cleanup on PR Close
+  cleanup-pr:
+    runs-on: ubuntu-latest
+    name: Cleanup PR Environment
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Azure Developer CLI
+      uses: Azure/setup-azd@v1.0.0
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Azure Dev Auth
+      run: azd auth login --client-id "${{ env.AZURE_CLIENT_ID }}" --federated-credential-provider "github" --tenant-id "${{ env.AZURE_TENANT_ID }}"
+
+    - name: Cleanup PR Environment
+      run: |
+        ENV_NAME="pr-${{ github.event.number }}"
+        if azd env list | grep -q "$ENV_NAME"; then
+          echo "Cleaning up environment: $ENV_NAME"
+          azd down --environment "$ENV_NAME" --force --purge
+        else
+          echo "No environment found for PR ${{ github.event.number }}"
+        fi
