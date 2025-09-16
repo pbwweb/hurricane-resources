@@ -1,0 +1,490 @@
+﻿@page "/"
+@inject HurricaneResourcesDbContext DbContext
+@inject IBlobStorageService BlobStorageService
+@inject IOptions<AzureBlobStorageOptions> BlobOptions
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Extensions.Options
+@using HurricaneResources.Shared.Models
+@using HurricaneResources.Shared.Data
+@using HurricaneResources.Shared.Services
+@using HurricaneResources.Shared.Configuration
+
+<PageTitle>Hurricane Resources Admin</PageTitle>
+
+<div class="container-fluid p-3">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="display-6 fw-bold text-primary">🌀 Hurricane Resources Admin</h1>
+        <button class="btn btn-success" @onclick="ShowAddModal">
+            <i class="bi bi-plus-circle me-2"></i>Add New Resource
+        </button>
+    </div>
+
+    @if (loading)
+    {
+        <div class="d-flex justify-content-center">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Resources Management</h5>
+                
+                @if (resources.Any())
+                {
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-primary">
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Category</th>
+                                    <th>Name</th>
+                                    <th>Icon</th>
+                                    <th>Resource Link</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var resource in resources)
+                                {
+                                    <tr class="@(resource.IsActive ? "" : "table-secondary")">
+                                        <td>@resource.Id</td>
+                                        <td>
+                                            <span class="badge bg-primary">
+                                                <i class="bi @resource.CategoryBootstrapIcon me-1"></i>
+                                                @resource.CategoryDisplayName
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <strong>@(string.IsNullOrEmpty(resource.Name) ? "Unnamed Resource" : resource.Name)</strong>
+                                        </td>
+                                        <td>
+                                            <img src="@resource.IconUrl" alt="Icon" style="width: 40px; height: 40px; object-fit: cover;" class="rounded border" onerror="this.src='@BlobOptions.Value.DefaultIconUrl'; this.onerror=null;">
+                                        </td>
+                                        <td>
+                                            <a href="@resource.ResourceLink" target="_blank" class="text-truncate d-inline-block" style="max-width: 250px;">
+                                                @resource.ResourceLink
+                                            </a>
+                                        </td>
+                                        <td>
+                                            @if (resource.IsActive)
+                                            {
+                                                <span class="badge bg-success">Active</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge bg-secondary">Inactive</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <div class="btn-group" role="group">
+                                                <button class="btn btn-outline-primary btn-sm" @onclick="@(() => EditResource(resource))">
+                                                    <i class="bi bi-pencil"></i>
+                                                </button>
+                                                <button class="btn btn-outline-danger btn-sm" @onclick="@(() => DeleteResource(resource))">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-center py-5">
+                        <i class="bi bi-inbox display-1 text-muted"></i>
+                        <p class="text-muted">No resources found. Add your first resource to get started.</p>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Add/Edit Modal -->
+@if (showModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-image me-2"></i>@(editingResource?.Id > 0 ? "Edit Hurricane Resource" : "Add New Hurricane Resource")
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseModal"></button>
+                </div>
+                <EditForm Model="EditingResource" OnValidSubmit="SaveResource">
+                    <DataAnnotationsValidator />
+                    <div class="modal-body">
+                        <ValidationSummary class="text-danger" />
+                        
+                        <div class="alert alert-info small mb-3">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <strong>Note:</strong> Icons will be stored in Azure Blob Storage. Upload a JPG file and provide the resource link for mobile users.
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Category</label>
+                            <InputSelect @bind-Value="EditingResource.Category" class="form-select">
+                                @foreach (var category in Enum.GetValues<ResourceCategory>())
+                                {
+                                    <option value="@category">@category.GetDisplayName()</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="@(() => EditingResource.Category)" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Resource Name</label>
+                            <InputText @bind-Value="EditingResource.Name" class="form-control" placeholder="Enter a descriptive name for this resource" />
+                            <ValidationMessage For="@(() => EditingResource.Name)" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Upload Icon (JPG)</label>
+                            <InputFile class="form-control" accept=".jpg,.jpeg" OnChange="OnFileSelected" />
+                            <div class="form-text">
+                                Select a JPG image file to upload to Azure Blob Storage. 
+                                <br />Recommended size: 64x64 pixels or higher for best quality.
+                                <br />The filename will be automatically generated when uploaded.
+                            </div>
+                            @if (!string.IsNullOrEmpty(uploadMessage))
+                            {
+                                <div class="alert alert-info mt-2 small">
+                                    @uploadMessage
+                                </div>
+                            }
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Resource Link</label>
+                            <InputText @bind-Value="EditingResource.ResourceLink" class="form-control" placeholder="https://example.com/resource" />
+                            <ValidationMessage For="@(() => EditingResource.ResourceLink)" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Current Icon Preview</label>
+                            <div class="border rounded p-3 bg-light d-flex align-items-center justify-content-center" style="min-height: 120px;">
+                                @if (!string.IsNullOrEmpty(EditingResource.IconUrl))
+                                {
+                                    <div class="text-center">
+                                        <img src="@EditingResource.IconUrl" alt="Current Icon" style="max-width: 80px; max-height: 80px; object-fit: cover;" class="rounded border" 
+                                             onerror="this.src='@BlobOptions.Value.DefaultIconUrl'; this.onerror=null;">
+                                        <div class="text-muted small mt-2">
+                                            <code class="small">@EditingResource.IconUrl</code>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="text-center">
+                                        <img src="@BlobOptions.Value.DefaultIconUrl" alt="Default Icon" style="max-width: 80px; max-height: 80px; object-fit: cover;" class="rounded border">
+                                        <div class="text-muted small mt-2">Default Icon</div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="mb-3 form-check">
+                            <InputCheckbox @bind-Value="EditingResource.IsActive" class="form-check-input" id="isActive" />
+                            <label class="form-check-label" for="isActive">
+                                Active
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @onclick="CloseModal" disabled="@isSubmitting">Cancel</button>
+                        <button type="submit" class="btn btn-primary" disabled="@isSubmitting">
+                            @if (isSubmitting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                <span>Saving...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-save me-2"></i>
+                                <span>Save</span>
+                            }
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<HurricaneResource> resources = new();
+    private bool loading = true;
+    private bool showModal = false;
+    private bool isSubmitting = false;
+    private HurricaneResource editingResource = new();
+    private string uploadMessage = string.Empty;
+    private IBrowserFile? selectedFile;
+    
+    // Ensure editingResource is never null
+    private HurricaneResource EditingResource => editingResource ??= new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadResources();
+    }
+
+    private async Task LoadResources()
+    {
+        loading = true;
+        try
+        {
+            resources = await DbContext.Resources
+                .OrderBy(r => r.Category)
+                .ThenBy(r => r.FileName)
+                .ToListAsync();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void ShowAddModal()
+    {
+        editingResource = new HurricaneResource();
+        showModal = true;
+    }
+
+    private void EditResource(HurricaneResource resource)
+    {
+        editingResource = new HurricaneResource
+        {
+            Id = resource.Id,
+            Category = resource.Category,
+            Name = resource.Name,
+            FileName = resource.FileName,
+            ResourceLink = resource.ResourceLink,
+            IconUrl = resource.IconUrl,
+            IsActive = resource.IsActive,
+            CreatedAt = resource.CreatedAt,
+            UpdatedAt = resource.UpdatedAt
+        };
+        showModal = true;
+    }
+
+    private async Task SaveResource()
+    {
+        if (isSubmitting) return; // Prevent double submission
+        
+        // Basic validation
+        if (string.IsNullOrWhiteSpace(editingResource.Name))
+        {
+            uploadMessage = "Resource Name is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(editingResource.ResourceLink))
+        {
+            uploadMessage = "Resource Link is required.";
+            return;
+        }
+
+        if (!Uri.IsWellFormedUriString(editingResource.ResourceLink, UriKind.Absolute))
+        {
+            uploadMessage = "Please enter a valid URL for the Resource Link.";
+            return;
+        }
+        
+        try
+        {
+            isSubmitting = true;
+            uploadMessage = "Saving resource...";
+            StateHasChanged();
+
+            // Handle file upload if a file is selected
+            if (selectedFile != null)
+            {
+                uploadMessage = "Uploading file to Azure Blob Storage...";
+                StateHasChanged();
+
+                // If updating existing resource with icon, delete old file first
+                if (editingResource.Id > 0 && !string.IsNullOrEmpty(editingResource.FileName))
+                {
+                    try
+                    {
+                        await BlobStorageService.DeleteIconAsync(editingResource.FileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't fail - old file might already be deleted
+                        Console.WriteLine($"Warning: Could not delete old icon file: {ex.Message}");
+                    }
+                }
+
+                // Generate unique filename using the blob storage service
+                editingResource.FileName = IBlobStorageService.GenerateIconFileName(
+                    editingResource.Category.ToString(), 
+                    selectedFile.Name);
+
+                // Upload file to Azure Blob Storage
+                using var stream = selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024); // 5MB limit
+                editingResource.IconUrl = await BlobStorageService.UploadIconAsync(stream, editingResource.FileName, selectedFile.ContentType);
+                
+                uploadMessage = "File uploaded successfully, saving resource...";
+                StateHasChanged();
+            }
+
+            if (editingResource.Id > 0)
+            {
+                // Update existing resource
+                var existing = await DbContext.Resources.FindAsync(editingResource.Id);
+                if (existing != null)
+                {
+                    existing.Category = editingResource.Category;
+                    existing.Name = editingResource.Name;
+                    existing.ResourceLink = editingResource.ResourceLink;
+                    existing.IconUrl = editingResource.IconUrl;
+                    existing.IsActive = editingResource.IsActive;
+                    existing.UpdatedAt = DateTime.UtcNow;
+                    
+                    // Only update filename if a new file was uploaded
+                    if (selectedFile != null)
+                    {
+                        existing.FileName = editingResource.FileName;
+                    }
+                }
+            }
+            else
+            {
+                // Add new resource - filename is required for new resources
+                if (selectedFile == null)
+                {
+                    uploadMessage = "Please select an icon file for new resources.";
+                    return;
+                }
+                
+                editingResource.CreatedAt = DateTime.UtcNow;
+                editingResource.UpdatedAt = DateTime.UtcNow;
+                DbContext.Resources.Add(editingResource);
+            }
+
+            await DbContext.SaveChangesAsync();
+            await LoadResources();
+            
+            uploadMessage = "Resource saved successfully!";
+            StateHasChanged();
+            await Task.Delay(1500); // Show success message briefly
+            CloseModal();
+        }
+        catch (Exception ex)
+        {
+            // Provide specific error messages based on exception type
+            if (ex.Message.Contains("Azure Blob Storage"))
+            {
+                uploadMessage = "Error connecting to Azure Blob Storage. Please check your configuration.";
+            }
+            else if (ex.Message.Contains("Failed to upload"))
+            {
+                uploadMessage = "Failed to upload file. Please try again or check your internet connection.";
+            }
+            else if (ex.Message.Contains("ConnectionString"))
+            {
+                uploadMessage = "Azure Storage configuration error. Please check your connection string.";
+            }
+            else
+            {
+                uploadMessage = $"Error saving resource: {ex.Message}";
+            }
+            
+            Console.WriteLine($"Error saving resource: {ex.Message}");
+            Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            StateHasChanged();
+        }
+        finally
+        {
+            isSubmitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteResource(HurricaneResource resource)
+    {
+        if (await ConfirmDelete(resource))
+        {
+            try
+            {
+                // Delete the icon file from blob storage if it exists
+                if (!string.IsNullOrEmpty(resource.FileName))
+                {
+                    try
+                    {
+                        await BlobStorageService.DeleteIconAsync(resource.FileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't fail - file might already be deleted or not exist
+                        Console.WriteLine($"Warning: Could not delete icon file '{resource.FileName}': {ex.Message}");
+                    }
+                }
+
+                DbContext.Resources.Remove(resource);
+                await DbContext.SaveChangesAsync();
+                await LoadResources();
+            }
+            catch (Exception ex)
+            {
+                // Handle error
+                Console.WriteLine($"Error deleting resource: {ex.Message}");
+            }
+        }
+    }
+
+    private Task<bool> ConfirmDelete(HurricaneResource resource)
+    {
+        // In a real app, you'd show a proper confirmation dialog
+        // For now, we'll just return true
+        return Task.FromResult(true);
+    }
+
+    private void CloseModal()
+    {
+        showModal = false;
+        editingResource = new();
+        uploadMessage = string.Empty;
+        selectedFile = null;
+        isSubmitting = false;
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        uploadMessage = string.Empty;
+
+        if (selectedFile != null)
+        {
+            // Validate file type (JPG/JPEG only)
+            var allowedTypes = new[] { "image/jpeg", "image/jpg" };
+            if (!allowedTypes.Contains(selectedFile.ContentType.ToLower()))
+            {
+                uploadMessage = "Please select a JPG/JPEG image file only.";
+                selectedFile = null;
+                return;
+            }
+
+            // Validate file size (max 5MB)
+            if (selectedFile.Size > 5 * 1024 * 1024)
+            {
+                uploadMessage = "File size must be less than 5MB.";
+                selectedFile = null;
+                return;
+            }
+
+            uploadMessage = $"Selected: {selectedFile.Name} ({selectedFile.Size / 1024:F0} KB) - Ready to upload!";
+        }
+    }
+}
