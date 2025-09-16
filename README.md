@@ -2,8 +2,6 @@
 
 A mobile-friendly web application designed to help users access critical hurricane emergency resources in their area. Built with .NET 9.0, Blazor Server, and .NET Aspire for cloud-native development.
 
-![Hurricane Resources](assets/logos.png)
-
 ## 🌀 Overview
 
 The Hurricane Resources App provides a centralized platform for accessing emergency resources during hurricane events. It consists of two main applications:
