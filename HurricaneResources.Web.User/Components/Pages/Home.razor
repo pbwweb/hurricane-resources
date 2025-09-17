@@ -1,0 +1,90 @@
+﻿@page "/"
+@inject HurricaneResourcesDbContext DbContext
+@inject IOptions<AzureBlobStorageOptions> BlobOptions
+@rendermode InteractiveServer
+@using Microsoft.Extensions.Options
+@using HurricaneResources.Shared.Configuration
+
+<PageTitle>Hurricane Resources</PageTitle>
+
+<div class="mobile-app">
+    <!-- Header -->
+    <div class="app-header">
+        <div class="header-content">
+            
+           <img src="images/ready-broward.png" alt="Hurricane Resources" class="app-logo img-fluid" height="200" />
+            <p class="app-description">Tap any icon to access emergency resources</p>
+        </div>
+    </div>
+
+    <!-- Resources Grid -->
+    <div class="resources-container">
+        @if (loading)
+        {
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <p class="loading-text">Loading resources...</p>
+            </div>
+        }
+        else if (resources.Any())
+        {
+            <div class="resources-grid">
+                @foreach (var resource in resources.Where(r => r.IsActive))
+                {
+                    <div class="resource-item">
+                        <a href="@resource.ResourceLink" target="_blank" class="resource-link">
+                            <div class="resource-icon-container">
+                                @if (!string.IsNullOrEmpty(resource.IconUrl))
+                                {
+                                    <img src="@resource.IconUrl" alt="@resource.Name" class="resource-icon-image" 
+                                         onerror="this.src='@BlobOptions.Value.DefaultIconUrl'; this.onerror=null;">
+                                }
+                                else
+                                {
+                                    <img src="@BlobOptions.Value.DefaultIconUrl" alt="@resource.Name" class="resource-icon-image">
+                                }
+                            </div>
+                            <span class="resource-name">@(string.IsNullOrEmpty(resource.Name) ? resource.Category.GetDisplayName() : resource.Name)</span>
+                        </a>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="empty-state">
+                <div class="empty-icon">📋</div>
+                <h3>No Resources Available</h3>
+                <p>Check back later for emergency resources</p>
+            </div>
+        }
+    </div>
+</div>
+
+ 
+
+@code {
+    private List<HurricaneResource> resources = new();
+    private bool loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadResources();
+    }
+
+    private async Task LoadResources()
+    {
+        loading = true;
+        try
+        {
+            resources = await DbContext.Resources
+                .Where(r => r.IsActive)
+                .OrderBy(r => r.FileName)
+                .ToListAsync();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

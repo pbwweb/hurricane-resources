@@ -20,7 +20,10 @@ obj/
 # User-specific files
 *.rsuser
 *.suo
+# Visual Studio user-specific files (but not our Web.User project folder or Docker files)
 *.user
+!HurricaneResources.Web.User/
+!Dockerfile.user
 *.userosscache
 *.sln.docstates
 
