@@ -1,0 +1,33 @@
+# Dockerfile for Hurricane Resources User Application
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+USER app
+EXPOSE 8080
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+ARG BUILD_CONFIGURATION=Release
+WORKDIR /src
+
+# Copy project files
+COPY ["HurricaneResources.Web.User/HurricaneResources.Web.User.csproj", "HurricaneResources.Web.User/"]
+COPY ["HurricaneResources.Shared/HurricaneResources.Shared.csproj", "HurricaneResources.Shared/"]
+COPY ["HurricaneResources.ServiceDefaults/HurricaneResources.ServiceDefaults.csproj", "HurricaneResources.ServiceDefaults/"]
+
+# Restore dependencies
+RUN dotnet restore "./HurricaneResources.Web.User/HurricaneResources.Web.User.csproj"
+
+# Copy all source code
+COPY . .
+
+# Build the application
+WORKDIR "/src/HurricaneResources.Web.User"
+RUN dotnet build "./HurricaneResources.Web.User.csproj" -c "${BUILD_CONFIGURATION}" -o /app/build
+
+FROM build AS publish
+ARG BUILD_CONFIGURATION=Release
+RUN dotnet publish "./HurricaneResources.Web.User.csproj" -c "${BUILD_CONFIGURATION}" -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "HurricaneResources.Web.User.dll"]
