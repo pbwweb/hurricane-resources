@@ -44,7 +44,7 @@ jobs:
       uses: Azure/setup-azd@v1.0.0
 
     - name: Azure Login
-      uses: azure/login@v1
+      uses: azure/login@v2
       with:
         client-id: ${{ env.AZURE_CLIENT_ID }}
         tenant-id: ${{ env.AZURE_TENANT_ID }}
