@@ -93,7 +93,7 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Build Admin Docker image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: .
         file: ./Dockerfile.admin
@@ -103,7 +103,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Build User Docker image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: .
         file: ./Dockerfile.user
