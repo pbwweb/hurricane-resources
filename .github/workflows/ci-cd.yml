@@ -155,7 +155,7 @@ jobs:
         subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
     - name: Validate Bicep templates
-      uses: azure/arm-deploy@v1
+      uses: azure/arm-deploy@v2
       with:
         subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
         scope: subscription
