@@ -41,7 +41,7 @@ jobs:
       run: dotnet build --configuration Release --no-restore
 
     - name: Setup Azure Developer CLI
-      uses: Azure/setup-azd@v1.0.0
+      uses: Azure/setup-azd@v2.2.0
 
     - name: Azure Login
       uses: azure/login@v1
